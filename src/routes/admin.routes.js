@@ -6,7 +6,7 @@ const News = require('../models/News');
 const {requireAuth, requireAdmin} = require('../middleware/auth');
 const {signToken} = require('../utils/auth');
 const env = require('../config/env');
-const {getPublicBase, isR2Configured, uploadNewsImage} = require('../utils/r2');
+const {getPublicBase, isR2Configured, getR2ConfigStatus, uploadNewsImage} = require('../utils/r2');
 
 const router = express.Router();
 const upload = multer({
@@ -144,7 +144,11 @@ router.get('/news', requireAuth, requireAdmin, async (_req, res) => {
 router.post('/news/upload-image', requireAuth, requireAdmin, async (req, res) => {
   try {
     if (!isR2Configured()) {
-      return res.status(503).json({message: 'R2 storage is not configured on server'});
+      const status = getR2ConfigStatus();
+      return res.status(503).json({
+        message: 'R2 storage is not configured on server',
+        missing: status.missing,
+      });
     }
 
     await uploadSingleImage(req, res);
@@ -171,13 +175,23 @@ router.post('/news/upload-image', requireAuth, requireAdmin, async (req, res) =>
       size: req.file.size,
     });
   } catch (error) {
+    const uploadError = {
+      message: error?.message || 'Unknown upload error',
+      code: error?.code || error?.name || 'UNKNOWN',
+      statusCode: error?.$metadata?.httpStatusCode || null,
+      requestId: error?.$metadata?.requestId || null,
+    };
+
+    // eslint-disable-next-line no-console
+    console.error('R2 upload failed', uploadError);
+
     if (error?.code === 'LIMIT_FILE_SIZE') {
       return res
         .status(400)
         .json({message: `Image too large. Max size is ${Math.round(env.maxImageUploadBytes / (1024 * 1024))}MB`});
     }
 
-    return res.status(500).json({message: 'Failed to upload image'});
+    return res.status(500).json({message: 'Failed to upload image', error: uploadError});
   }
 });
 

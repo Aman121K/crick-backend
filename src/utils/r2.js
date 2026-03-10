@@ -3,8 +3,30 @@ const path = require('path');
 const {S3Client, PutObjectCommand} = require('@aws-sdk/client-s3');
 const env = require('../config/env');
 
+const getR2ConfigStatus = () => {
+  const missing = [];
+
+  if (!env.r2Endpoint) {
+    missing.push('R2_ENDPOINT');
+  }
+  if (!env.r2Bucket) {
+    missing.push('R2_BUCKET');
+  }
+  if (!env.r2AccessKeyId) {
+    missing.push('R2_ACCESS_KEY_ID');
+  }
+  if (!env.r2SecretAccessKey) {
+    missing.push('R2_SECRET_ACCESS_KEY');
+  }
+
+  return {
+    configured: missing.length === 0,
+    missing,
+  };
+};
+
 const isR2Configured = () => {
-  return Boolean(env.r2Endpoint && env.r2Bucket && env.r2AccessKeyId && env.r2SecretAccessKey);
+  return getR2ConfigStatus().configured;
 };
 
 const getPublicBase = () => {
@@ -13,6 +35,25 @@ const getPublicBase = () => {
   }
 
   return String(env.r2PublicBaseUrl).trim().replace(/\/+$/, '');
+};
+
+const normalizeEndpoint = (rawEndpoint, bucketName) => {
+  const endpoint = String(rawEndpoint || '').trim().replace(/\/+$/, '');
+  if (!endpoint) {
+    return '';
+  }
+
+  const bucket = String(bucketName || '').trim();
+  if (!bucket) {
+    return endpoint;
+  }
+
+  const bucketSuffix = `/${bucket}`;
+  if (endpoint.endsWith(bucketSuffix)) {
+    return endpoint.slice(0, -bucketSuffix.length);
+  }
+
+  return endpoint;
 };
 
 const mimeToExt = mimeType => {
@@ -44,9 +85,10 @@ const buildKey = ({originalName, mimeType}) => {
 };
 
 const getS3Client = () => {
+  const endpoint = normalizeEndpoint(env.r2Endpoint, env.r2Bucket);
   return new S3Client({
     region: env.r2Region || 'auto',
-    endpoint: env.r2Endpoint,
+    endpoint,
     credentials: {
       accessKeyId: env.r2AccessKeyId,
       secretAccessKey: env.r2SecretAccessKey,
@@ -60,7 +102,7 @@ const buildPublicUrl = key => {
     return `${publicBase}/${key}`;
   }
 
-  const endpoint = String(env.r2Endpoint).replace(/\/+$/, '');
+  const endpoint = normalizeEndpoint(env.r2Endpoint, env.r2Bucket);
   return `${endpoint}/${env.r2Bucket}/${key}`;
 };
 
@@ -87,6 +129,8 @@ const uploadNewsImage = async ({buffer, mimeType, originalName}) => {
 
 module.exports = {
   isR2Configured,
+  getR2ConfigStatus,
+  normalizeEndpoint,
   uploadNewsImage,
   getPublicBase,
 };

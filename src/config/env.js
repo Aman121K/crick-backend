@@ -14,9 +14,9 @@ const env = {
   corsOrigin: process.env.CORS_ORIGIN || '*',
   r2Endpoint:
     process.env.R2_ENDPOINT || 'https://72b2bc9b88cbd4ffb61195d1a5d60807.r2.cloudflarestorage.com',
-  r2Bucket: process.env.R2_BUCKET || 'cricbuzz',
-  r2AccessKeyId: process.env.R2_ACCESS_KEY_ID || '',
-  r2SecretAccessKey: process.env.R2_SECRET_ACCESS_KEY || '',
+  r2Bucket: process.env.R2_BUCKET || 'criclive',
+  r2AccessKeyId: process.env.R2_ACCESS_KEY_ID || '2db8bb16590f85fbe0ac59de3a7c1ad9',
+  r2SecretAccessKey: process.env.R2_SECRET_ACCESS_KEY || 'b396d1672b56fe02c8bdd6236d0d79799752f564905855a9cfaa8ee13f9db4fc',
   r2PublicBaseUrl: process.env.R2_PUBLIC_BASE_URL || '',
   r2Region: process.env.R2_REGION || 'auto',
   r2KeyPrefix: process.env.R2_KEY_PREFIX || 'news',
