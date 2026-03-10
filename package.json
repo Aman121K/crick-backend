@@ -1,0 +1,25 @@
+{
+  "name": "cricbuzz-admin-server",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "nodemon src/index.js",
+    "start": "node src/index.js",
+    "seed:admin": "node src/utils/seedAdmin.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.872.0",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.8.1",
+    "multer": "^2.0.0",
+    "morgan": "^1.10.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.7"
+  }
+}
