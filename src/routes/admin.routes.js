@@ -54,6 +54,26 @@ const normalizeUrl = value => {
   return normalized;
 };
 
+const stripHtml = value =>
+  String(value || '')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const buildSummary = (providedSummary, content, title) => {
+  const explicit = String(providedSummary || '').trim();
+  if (explicit) {
+    return explicit;
+  }
+
+  const source = stripHtml(content) || String(title || '').trim();
+  if (!source) {
+    return '';
+  }
+
+  return source.length > 180 ? `${source.slice(0, 177)}...` : source;
+};
+
 const ALLOWED_IMAGE_MIME_TYPES = new Set([
   'image/jpeg',
   'image/jpg',
@@ -199,7 +219,7 @@ router.post('/news', requireAuth, requireAdmin, async (req, res) => {
   try {
     const {
       title,
-      summary,
+      summary = '',
       content = '',
       imageUrl = '',
       thumbnailUrl = '',
@@ -207,17 +227,19 @@ router.post('/news', requireAuth, requireAdmin, async (req, res) => {
       isPublished = true,
     } = req.body;
 
-    if (!title || !summary) {
-      return res.status(400).json({message: 'title and summary are required'});
+    if (!title) {
+      return res.status(400).json({message: 'title is required'});
     }
 
     const normalizedImageUrl = normalizeUrl(imageUrl);
     const normalizedThumbnailUrl = normalizeUrl(thumbnailUrl || normalizedImageUrl);
+    const normalizedTitle = String(title).trim();
+    const normalizedContent = String(content).trim();
 
     const item = await News.create({
-      title: String(title).trim(),
-      summary: String(summary).trim(),
-      content: String(content).trim(),
+      title: normalizedTitle,
+      summary: buildSummary(summary, normalizedContent, normalizedTitle),
+      content: normalizedContent,
       imageUrl: normalizedImageUrl,
       thumbnailUrl: normalizedThumbnailUrl,
       tag: String(tag).trim() || 'MYCRICKET',
@@ -231,6 +253,59 @@ router.post('/news', requireAuth, requireAdmin, async (req, res) => {
       return res.status(400).json({message: error.message});
     }
     return res.status(500).json({message: 'Failed to create news'});
+  }
+});
+
+router.patch('/news/:id', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const {title, summary = '', content = '', imageUrl = '', thumbnailUrl = '', tag = 'MYCRICKET', isPublished} = req.body;
+    const normalizedTitle = String(title || '').trim();
+
+    if (!normalizedTitle) {
+      return res.status(400).json({message: 'title is required'});
+    }
+
+    const normalizedImageUrl = normalizeUrl(imageUrl);
+    const normalizedThumbnailUrl = normalizeUrl(thumbnailUrl || normalizedImageUrl);
+    const normalizedContent = String(content).trim();
+
+    const item = await News.findByIdAndUpdate(
+      req.params.id,
+      {
+        title: normalizedTitle,
+        summary: buildSummary(summary, normalizedContent, normalizedTitle),
+        content: normalizedContent,
+        imageUrl: normalizedImageUrl,
+        thumbnailUrl: normalizedThumbnailUrl,
+        tag: String(tag).trim() || 'MYCRICKET',
+        ...(typeof isPublished === 'boolean' ? {isPublished: Boolean(isPublished)} : {}),
+      },
+      {new: true}
+    );
+
+    if (!item) {
+      return res.status(404).json({message: 'News not found'});
+    }
+
+    return res.json({item});
+  } catch (error) {
+    if (String(error.message || '').toLowerCase().includes('image url')) {
+      return res.status(400).json({message: error.message});
+    }
+    return res.status(500).json({message: 'Failed to update news'});
+  }
+});
+
+router.delete('/news/:id', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const item = await News.findByIdAndDelete(req.params.id);
+    if (!item) {
+      return res.status(404).json({message: 'News not found'});
+    }
+
+    return res.json({ok: true});
+  } catch (error) {
+    return res.status(500).json({message: 'Failed to delete news'});
   }
 });
 

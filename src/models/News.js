@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const newsSchema = new mongoose.Schema(
   {
     title: {type: String, required: true, trim: true},
-    summary: {type: String, required: true, trim: true},
+    summary: {type: String, default: '', trim: true},
     content: {type: String, default: '', trim: true},
     imageUrl: {type: String, default: '', trim: true},
     thumbnailUrl: {type: String, default: '', trim: true},
