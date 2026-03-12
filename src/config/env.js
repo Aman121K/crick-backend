@@ -4,6 +4,14 @@ const dotenv = require('dotenv');
 dotenv.config({path: path.resolve(process.cwd(), '.env')});
 dotenv.config({path: path.resolve(__dirname, '../../.env')});
 
+const asPositiveNumber = (value, fallback) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return parsed;
+};
+
 const env = {
   port: Number(process.env.PORT || 4000),
   mongoUri: process.env.MONGODB_URI || 'mongodb://127.0.0.1:27018/cricbuzz_admin',
@@ -20,7 +28,7 @@ const env = {
   r2PublicBaseUrl: process.env.R2_PUBLIC_BASE_URL || '',
   r2Region: process.env.R2_REGION || 'auto',
   r2KeyPrefix: process.env.R2_KEY_PREFIX || 'news',
-  maxImageUploadBytes: Number(process.env.MAX_IMAGE_UPLOAD_BYTES || 5 * 1024 * 1024),
+  maxImageUploadBytes: asPositiveNumber(process.env.MAX_IMAGE_UPLOAD_BYTES, 15 * 1024 * 1024),
   enforceR2NewsImages: String(process.env.ENFORCE_R2_NEWS_IMAGES || 'false').toLowerCase() === 'true',
 };
 

@@ -13,9 +13,26 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: {fileSize: env.maxImageUploadBytes},
 });
+const NEWS_UPLOAD_FIELDS = [
+  {name: 'file', maxCount: 1},
+  {name: 'image', maxCount: 1},
+  {name: 'thumbnail', maxCount: 1},
+  {name: 'thumbnailFile', maxCount: 1},
+];
 const uploadSingleImage = (req, res) =>
   new Promise((resolve, reject) => {
     upload.single('file')(req, res, error => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
+  });
+const uploadNewsMedia = (req, res) =>
+  new Promise((resolve, reject) => {
+    upload.fields(NEWS_UPLOAD_FIELDS)(req, res, error => {
       if (error) {
         reject(error);
         return;
@@ -81,6 +98,66 @@ const ALLOWED_IMAGE_MIME_TYPES = new Set([
   'image/webp',
   'image/gif',
 ]);
+
+const handleUploadError = (error, res) => {
+  const uploadError = {
+    message: error?.message || 'Unknown upload error',
+    code: error?.code || error?.name || 'UNKNOWN',
+    statusCode: error?.$metadata?.httpStatusCode || null,
+    requestId: error?.$metadata?.requestId || null,
+  };
+
+  // eslint-disable-next-line no-console
+  console.error('R2 upload failed', uploadError);
+
+  if (error?.code === 'LIMIT_FILE_SIZE') {
+    return res
+      .status(413)
+      .json({message: `Image too large. Max size is ${Math.round(env.maxImageUploadBytes / (1024 * 1024))}MB`});
+  }
+  if (error?.name === 'MulterError') {
+    return res.status(400).json({message: error?.message || 'Invalid file upload payload'});
+  }
+
+  return res.status(500).json({message: 'Failed to upload image', error: uploadError});
+};
+
+const getUploadedFile = (files, keys = []) => {
+  for (const key of keys) {
+    const file = files?.[key]?.[0];
+    if (file) {
+      return file;
+    }
+  }
+  return null;
+};
+
+const assertAllowedImage = file => {
+  const mimeType = String(file?.mimetype || '').toLowerCase();
+  if (!ALLOWED_IMAGE_MIME_TYPES.has(mimeType)) {
+    throw new Error('Only JPG, PNG, WEBP, or GIF files are allowed');
+  }
+  return mimeType;
+};
+
+const parseBooleanLike = value => {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (['true', '1', 'yes'].includes(normalized)) {
+    return true;
+  }
+  if (['false', '0', 'no'].includes(normalized)) {
+    return false;
+  }
+  return undefined;
+};
 
 router.post('/login', async (req, res) => {
   try {
@@ -195,28 +272,25 @@ router.post('/news/upload-image', requireAuth, requireAdmin, async (req, res) =>
       size: req.file.size,
     });
   } catch (error) {
-    const uploadError = {
-      message: error?.message || 'Unknown upload error',
-      code: error?.code || error?.name || 'UNKNOWN',
-      statusCode: error?.$metadata?.httpStatusCode || null,
-      requestId: error?.$metadata?.requestId || null,
-    };
-
-    // eslint-disable-next-line no-console
-    console.error('R2 upload failed', uploadError);
-
-    if (error?.code === 'LIMIT_FILE_SIZE') {
-      return res
-        .status(400)
-        .json({message: `Image too large. Max size is ${Math.round(env.maxImageUploadBytes / (1024 * 1024))}MB`});
-    }
-
-    return res.status(500).json({message: 'Failed to upload image', error: uploadError});
+    return handleUploadError(error, res);
   }
 });
 
 router.post('/news', requireAuth, requireAdmin, async (req, res) => {
   try {
+    await uploadNewsMedia(req, res);
+
+    const imageFile = getUploadedFile(req.files, ['image', 'file']);
+    const thumbnailFile = getUploadedFile(req.files, ['thumbnail', 'thumbnailFile']);
+
+    if ((imageFile || thumbnailFile) && !isR2Configured()) {
+      const status = getR2ConfigStatus();
+      return res.status(503).json({
+        message: 'R2 storage is not configured on server',
+        missing: status.missing,
+      });
+    }
+
     const {
       title,
       summary = '',
@@ -231,10 +305,26 @@ router.post('/news', requireAuth, requireAdmin, async (req, res) => {
       return res.status(400).json({message: 'title is required'});
     }
 
-    const normalizedImageUrl = normalizeUrl(imageUrl);
-    const normalizedThumbnailUrl = normalizeUrl(thumbnailUrl || normalizedImageUrl);
+    const uploadedImage =
+      imageFile &&
+      (await uploadNewsImage({
+        buffer: imageFile.buffer,
+        mimeType: assertAllowedImage(imageFile),
+        originalName: imageFile.originalname,
+      }));
+    const uploadedThumbnail =
+      thumbnailFile &&
+      (await uploadNewsImage({
+        buffer: thumbnailFile.buffer,
+        mimeType: assertAllowedImage(thumbnailFile),
+        originalName: thumbnailFile.originalname,
+      }));
+
+    const normalizedImageUrl = normalizeUrl(uploadedImage?.url || imageUrl);
+    const normalizedThumbnailUrl = normalizeUrl(uploadedThumbnail?.url || thumbnailUrl || normalizedImageUrl);
     const normalizedTitle = String(title).trim();
     const normalizedContent = String(content).trim();
+    const normalizedIsPublished = parseBooleanLike(isPublished);
 
     const item = await News.create({
       title: normalizedTitle,
@@ -243,13 +333,25 @@ router.post('/news', requireAuth, requireAdmin, async (req, res) => {
       imageUrl: normalizedImageUrl,
       thumbnailUrl: normalizedThumbnailUrl,
       tag: String(tag).trim() || 'MYCRICKET',
-      isPublished: Boolean(isPublished),
+      isPublished: normalizedIsPublished === undefined ? true : normalizedIsPublished,
       createdBy: req.user._id,
     });
 
-    return res.status(201).json({item});
+    return res.status(201).json({
+      item,
+      uploads: {
+        image: uploadedImage || null,
+        thumbnail: uploadedThumbnail || null,
+      },
+    });
   } catch (error) {
+    if (error?.code === 'LIMIT_FILE_SIZE' || error?.$metadata || error?.name === 'MulterError') {
+      return handleUploadError(error, res);
+    }
     if (String(error.message || '').toLowerCase().includes('image url')) {
+      return res.status(400).json({message: error.message});
+    }
+    if (String(error.message || '').toLowerCase().includes('only jpg')) {
       return res.status(400).json({message: error.message});
     }
     return res.status(500).json({message: 'Failed to create news'});
@@ -258,6 +360,19 @@ router.post('/news', requireAuth, requireAdmin, async (req, res) => {
 
 router.patch('/news/:id', requireAuth, requireAdmin, async (req, res) => {
   try {
+    await uploadNewsMedia(req, res);
+
+    const imageFile = getUploadedFile(req.files, ['image', 'file']);
+    const thumbnailFile = getUploadedFile(req.files, ['thumbnail', 'thumbnailFile']);
+
+    if ((imageFile || thumbnailFile) && !isR2Configured()) {
+      const status = getR2ConfigStatus();
+      return res.status(503).json({
+        message: 'R2 storage is not configured on server',
+        missing: status.missing,
+      });
+    }
+
     const {title, summary = '', content = '', imageUrl = '', thumbnailUrl = '', tag = 'MYCRICKET', isPublished} = req.body;
     const normalizedTitle = String(title || '').trim();
 
@@ -265,9 +380,25 @@ router.patch('/news/:id', requireAuth, requireAdmin, async (req, res) => {
       return res.status(400).json({message: 'title is required'});
     }
 
-    const normalizedImageUrl = normalizeUrl(imageUrl);
-    const normalizedThumbnailUrl = normalizeUrl(thumbnailUrl || normalizedImageUrl);
+    const uploadedImage =
+      imageFile &&
+      (await uploadNewsImage({
+        buffer: imageFile.buffer,
+        mimeType: assertAllowedImage(imageFile),
+        originalName: imageFile.originalname,
+      }));
+    const uploadedThumbnail =
+      thumbnailFile &&
+      (await uploadNewsImage({
+        buffer: thumbnailFile.buffer,
+        mimeType: assertAllowedImage(thumbnailFile),
+        originalName: thumbnailFile.originalname,
+      }));
+
+    const normalizedImageUrl = normalizeUrl(uploadedImage?.url || imageUrl);
+    const normalizedThumbnailUrl = normalizeUrl(uploadedThumbnail?.url || thumbnailUrl || normalizedImageUrl);
     const normalizedContent = String(content).trim();
+    const normalizedIsPublished = parseBooleanLike(isPublished);
 
     const item = await News.findByIdAndUpdate(
       req.params.id,
@@ -278,7 +409,7 @@ router.patch('/news/:id', requireAuth, requireAdmin, async (req, res) => {
         imageUrl: normalizedImageUrl,
         thumbnailUrl: normalizedThumbnailUrl,
         tag: String(tag).trim() || 'MYCRICKET',
-        ...(typeof isPublished === 'boolean' ? {isPublished: Boolean(isPublished)} : {}),
+        ...(normalizedIsPublished !== undefined ? {isPublished: normalizedIsPublished} : {}),
       },
       {new: true}
     );
@@ -287,9 +418,21 @@ router.patch('/news/:id', requireAuth, requireAdmin, async (req, res) => {
       return res.status(404).json({message: 'News not found'});
     }
 
-    return res.json({item});
+    return res.json({
+      item,
+      uploads: {
+        image: uploadedImage || null,
+        thumbnail: uploadedThumbnail || null,
+      },
+    });
   } catch (error) {
+    if (error?.code === 'LIMIT_FILE_SIZE' || error?.$metadata || error?.name === 'MulterError') {
+      return handleUploadError(error, res);
+    }
     if (String(error.message || '').toLowerCase().includes('image url')) {
+      return res.status(400).json({message: error.message});
+    }
+    if (String(error.message || '').toLowerCase().includes('only jpg')) {
       return res.status(400).json({message: error.message});
     }
     return res.status(500).json({message: 'Failed to update news'});
